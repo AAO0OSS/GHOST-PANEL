@@ -94,6 +94,13 @@ GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080  # fuera de la barra de tareas y de Alt+Tab
 WS_EX_APPWINDOW = 0x00040000   # lo contrario: fuerza su presencia en la barra
 
+# Barra de titulo oscura. El atributo es el 20 desde Windows 10 build 18985;
+# en las anteriores (1809) el mismo ajuste era el 19. Probamos los dos y nos
+# quedamos con el que Windows acepte: en un equipo viejo no pasa nada, la
+# barra se queda clara y el resto del panel funciona igual.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
+
 VK_CONTROL = 0x11
 VK_MENU = 0x12  # Alt
 VK_H = 0x48
@@ -154,6 +161,22 @@ def hide_from_taskbar(hwnd):
         return False
     _set_window_long(hwnd, GWL_EXSTYLE, wanted)
     return True
+
+
+def use_dark_titlebar(hwnd):
+    """Pinta de oscuro la barra de titulo del sistema. True si Windows acepta."""
+    valor = ctypes.c_int(1)
+    for atributo in (DWMWA_USE_IMMERSIVE_DARK_MODE,
+                     DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
+        try:
+            resultado = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(hwnd), ctypes.c_uint(atributo),
+                ctypes.byref(valor), ctypes.sizeof(valor))
+        except (AttributeError, OSError):
+            return False
+        if resultado == 0:
+            return True
+    return False
 
 
 def toplevel_hwnd(window):
@@ -284,6 +307,10 @@ MIN_IMAGE_WIDTH = 60
 MAX_IMAGE_WIDTH = 2000
 PDF_PAGE_WARNING = 10
 
+# Margen tras el ultimo tecleo antes de guardar solo. Escribiendo del tiron
+# no llega a dispararse; en cuanto paras, el documento ya esta en disco.
+AUTOSAVE_DELAY = 1500    # milisegundos
+
 ZOOM_STEP = 1.15         # lo que crece o mengua por muesca de rueda
 VIEWER_MIN_WIDTH = 40
 VIEWER_MAX_WIDTH = 5000  # tope del visor: mas alla el zoom se come la RAM
@@ -297,8 +324,13 @@ def images_dir():
     os.makedirs(path, exist_ok=True)
     return path
 
+# El 1% es practicamente invisible, pero la ventana sigue ahi y sigue
+# recibiendo los clics. Por eso existe Ctrl+0, que la devuelve al 100%.
+MIN_OPACITY = 0.01
+
 DEFAULT_CONFIG = {"protected": True, "topmost": True, "hide_cursor": True,
-                  "ollama_model": "llama3.2", "geometry": "480x560"}
+                  "ollama_model": "llama3.2", "geometry": "480x560",
+                  "opacity": 0.92}
 
 
 def load_config():
@@ -401,6 +433,9 @@ class GhostPanel:
         self.viewer_file = None
         self.viewer_zoom = 1.0
         self.ollama_process = None  # solo si lo hemos arrancado nosotros
+        self.settings_open = False
+        self.autosave_job = None   # id del after() pendiente, si lo hay
+        self.loading = False       # True mientras se repuebla el panel
 
         # Arrancamos oculta y solo mostramos la ventana cuando la proteccion
         # ya esta puesta: asi no se cuela ni un fotograma en la grabacion.
@@ -408,12 +443,13 @@ class GhostPanel:
         root.title(APP_NAME)
         root.geometry(self.config["geometry"])
         root.minsize(340, 260)
-        root.configure(bg="#14161a")
+        root.configure(bg="#0c0e11")
         root.protocol("WM_DELETE_WINDOW", self.quit)
 
         self._build_ui()
 
         self.hwnd = toplevel_hwnd(root)
+        use_dark_titlebar(self.hwnd)
         self.apply_protection(self.config["protected"], announce=False)
         self.apply_topmost(self.config["topmost"])
 
@@ -423,6 +459,7 @@ class GhostPanel:
 
         self.remember_cursors()
         self.apply_cursor_hiding(self.config["hide_cursor"])
+        self.on_opacity_slide()  # deja el alpha y el % en su sitio al arrancar
 
         self.load_into_widget(load_document())
 
@@ -439,41 +476,59 @@ class GhostPanel:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Ghost.TCheckbutton", background="#14161a",
-                        foreground="#d8dee9", focuscolor="#14161a")
-        style.map("Ghost.TCheckbutton", background=[("active", "#14161a")])
+        style.configure("Ghost.TCheckbutton", background="#0c0e11",
+                        foreground="#d8dee9", focuscolor="#0c0e11")
+        style.map("Ghost.TCheckbutton", background=[("active", "#0c0e11")])
 
-        header = tk.Frame(root, bg="#14161a")
-        header.pack(fill="x", padx=12, pady=(12, 6))
+        # Cabecera de una sola linea: un punto de color con el estado de la
+        # proteccion, el de OBS al lado y el boton de ajustes. El titulo no se
+        # repite aqui porque ya lo pone la barra de ventana de Windows, y el
+        # detalle largo de la proteccion vive en el panel de ajustes, que es
+        # donde hay sitio para leerlo.
+        header = tk.Frame(root, bg="#0c0e11")
+        header.pack(fill="x", padx=12, pady=(10, 4))
 
-        tk.Label(header, text=APP_NAME, bg="#14161a", fg="#eceff4",
-                 font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        self.shield_dot = tk.Label(header, text="●", bg="#0c0e11",
+                                   fg="#a3be8c", font=("Segoe UI", 8))
+        self.shield_dot.pack(side="left")
 
-        self.shield_label = tk.Label(header, text="", bg="#14161a",
-                                     fg="#a3be8c", font=("Segoe UI", 9),
-                                     justify="left", wraplength=400)
-        self.shield_label.pack(anchor="w", pady=(4, 0))
+        self.shield_label = tk.Label(header, text="", bg="#0c0e11",
+                                     fg="#7b8494", font=("Segoe UI", 9))
+        self.shield_label.pack(side="left", padx=(5, 0))
 
-        self.obs_label = tk.Label(header, text="OBS: comprobando...",
-                                  bg="#14161a", fg="#7b8494",
+        self.obs_label = tk.Label(header, text="· comprobando OBS",
+                                  bg="#0c0e11", fg="#7b8494",
                                   font=("Segoe UI", 9))
-        self.obs_label.pack(anchor="w")
+        self.obs_label.pack(side="left", padx=(5, 0))
 
-        style.configure("Ghost.TNotebook", background="#14161a",
-                        borderwidth=0)
-        style.configure("Ghost.TNotebook.Tab", background="#1c1f26",
-                        foreground="#d8dee9", padding=(12, 4), borderwidth=0)
+        self.settings_button = tk.Button(
+            header, text="⚙", command=self.toggle_settings,
+            bg="#0c0e11", fg="#7b8494", relief="flat", bd=0,
+            activebackground="#13161b", activeforeground="#eceff4",
+            font=("Segoe UI Symbol", 12), cursor="hand2", padx=4)
+        self.settings_button.pack(side="right")
+
+        # El tema clam dibuja un marco claro alrededor del cuaderno y de cada
+        # pestaña. Se apagan igualando bordercolor/lightcolor/darkcolor al
+        # fondo: con borderwidth=0 solo no basta, el relieve sigue saliendo.
+        for nombre in ("Ghost.TNotebook", "Ghost.TNotebook.Tab"):
+            style.configure(nombre, borderwidth=0, bordercolor="#0c0e11",
+                            lightcolor="#0c0e11", darkcolor="#0c0e11")
+        style.configure("Ghost.TNotebook", background="#0c0e11")
+        style.configure("Ghost.TNotebook.Tab", background="#0c0e11",
+                        foreground="#616a7a", padding=(10, 4))
         style.map("Ghost.TNotebook.Tab",
-                  background=[("selected", "#3b4252")],
-                  foreground=[("selected", "#eceff4")])
+                  background=[("selected", "#0c0e11")],
+                  foreground=[("selected", "#d8dee9")])
 
         notebook = ttk.Notebook(root, style="Ghost.TNotebook")
         notebook.pack(fill="both", expand=True, padx=12, pady=6)
 
-        notes_tab = tk.Frame(notebook, bg="#14161a")
+        notes_tab = tk.Frame(notebook, bg="#0c0e11")
         notebook.add(notes_tab, text="Notas")
 
-        self.notes = tk.Text(notes_tab, bg="#1c1f26", fg="#eceff4",
+        self.notes = tk.Text(notes_tab, bd=0, highlightthickness=0,
+                             bg="#13161b", fg="#eceff4",
                              insertbackground="#eceff4", relief="flat",
                              font=("Consolas", 11), undo=True, wrap="word",
                              padx=10, pady=10)
@@ -481,42 +536,34 @@ class GhostPanel:
 
         self._build_chat_tab(notebook)
 
-        toggles = tk.Frame(root, bg="#14161a")
-        toggles.pack(fill="x", padx=12, pady=(0, 2))
-
         self.protected_var = tk.BooleanVar(value=self.config["protected"])
         self.topmost_var = tk.BooleanVar(value=self.config["topmost"])
         self.cursor_var = tk.BooleanVar(value=self.config["hide_cursor"])
 
-        ttk.Checkbutton(toggles, text="Invisible en capturas",
-                        variable=self.protected_var, style="Ghost.TCheckbutton",
-                        command=lambda: self.apply_protection(
-                            self.protected_var.get())).pack(side="left")
-        ttk.Checkbutton(toggles, text="Siempre encima",
-                        variable=self.topmost_var, style="Ghost.TCheckbutton",
-                        command=lambda: self.apply_topmost(
-                            self.topmost_var.get())).pack(side="left", padx=10)
-        ttk.Checkbutton(toggles, text="Sin cursor",
-                        variable=self.cursor_var, style="Ghost.TCheckbutton",
-                        command=lambda: self.apply_cursor_hiding(
-                            self.cursor_var.get())).pack(side="left")
+        # Pie de una linea: los atajos a la izquierda y las dos acciones a la
+        # derecha, planas y sin relleno de color para que no tiren del ojo.
+        footer = tk.Frame(root, bg="#0c0e11")
+        footer.pack(fill="x", padx=12, pady=(2, 8))
 
-        controls = tk.Frame(root, bg="#14161a")
-        controls.pack(fill="x", padx=12, pady=(0, 8))
+        # Los botones se empaquetan ANTES que la linea de atajos: en Tk el
+        # primero en entrar reserva su espacio, asi que si va antes la etiqueta
+        # con expand=True se queda con todo el ancho y recorta los botones.
+        for text, action in (("Guardar", self.save),
+                             ("Insertar", self.insert_file_dialog)):
+            tk.Button(footer, text=text, command=action, bg="#0c0e11",
+                      fg="#7b8494", relief="flat", bd=0,
+                      activebackground="#13161b", activeforeground="#eceff4",
+                      font=("Segoe UI", 9), cursor="hand2",
+                      padx=8).pack(side="right")
 
-        tk.Button(controls, text="Guardar", command=self.save,
-                  bg="#3b4252", fg="#eceff4", relief="flat",
-                  activebackground="#4c566a", activeforeground="#eceff4",
-                  padx=14).pack(side="right")
-        tk.Button(controls, text="Insertar", command=self.insert_file_dialog,
-                  bg="#3b4252", fg="#eceff4", relief="flat",
-                  activebackground="#4c566a", activeforeground="#eceff4",
-                  padx=14).pack(side="right", padx=6)
+        self.status_label = tk.Label(footer, text=HINT, bg="#0c0e11",
+                                     fg="#616a7a", font=("Segoe UI", 8),
+                                     anchor="w")
+        self.status_label.pack(side="left", fill="x", expand=True)
 
-        self.status_label = tk.Label(
-            root, text=HINT, bg="#14161a", fg="#616a7a",
-            font=("Segoe UI", 8), anchor="w")
-        self.status_label.pack(fill="x", padx=12, pady=(0, 8))
+        # Se construye ya, pero sin place(): asi shield_detail existe cuando
+        # apply_protection escribe en el, antes de que nadie abra los ajustes.
+        self._build_settings(style)
 
         root.bind("<Control-s>", lambda _event: self.save())
         # Interceptamos el pegado: si el portapapeles trae una imagen la
@@ -530,26 +577,160 @@ class GhostPanel:
         self.notes.bind("<Control-MouseWheel>", self.on_ctrl_wheel)
         self.notes.bind("<Double-Button-1>", self.on_double_click)
 
+        root.bind("<Control-Key-0>", self.reset_opacity)
+        self.notes.bind("<<Modified>>", self.on_notes_modified)
+
+    # -- ajustes --
+
+    SETTINGS_BG = "#111419"
+
+    def _build_settings(self, style):
+        """Tarjeta de ajustes, construida ya pero sin colocar.
+
+        A proposito no es un Toplevel, por el mismo motivo que el visor: la
+        exclusion de captura se aplica por ventana, asi que unos ajustes en
+        ventana aparte si apareceran en la grabacion.
+        """
+        bg = self.SETTINGS_BG
+        style.configure("GhostCard.TCheckbutton", background=bg,
+                        foreground="#d8dee9", focuscolor=bg)
+        style.map("GhostCard.TCheckbutton", background=[("active", bg)])
+        style.configure("Ghost.Horizontal.TScale", background=bg,
+                        troughcolor="#1d2129", borderwidth=0)
+
+        card = tk.Frame(self.root, bg=bg, highlightbackground="#1d2129",
+                        highlightthickness=1)
+        self.settings_card = card
+
+        head = tk.Frame(card, bg=bg)
+        head.pack(fill="x", padx=12, pady=(10, 8))
+        tk.Label(head, text="Ajustes", bg=bg, fg="#d8dee9",
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Button(head, text="✕", command=self.close_settings, bg=bg,
+                  fg="#616a7a", relief="flat", bd=0, activebackground=bg,
+                  activeforeground="#eceff4", font=("Segoe UI", 9),
+                  cursor="hand2").pack(side="right")
+
+        for text, var, action in (
+                ("Invisible en capturas", self.protected_var,
+                 lambda: self.apply_protection(self.protected_var.get())),
+                ("Siempre encima", self.topmost_var,
+                 lambda: self.apply_topmost(self.topmost_var.get())),
+                ("Ocultar el cursor encima", self.cursor_var,
+                 lambda: self.apply_cursor_hiding(self.cursor_var.get()))):
+            ttk.Checkbutton(card, text=text, variable=var,
+                            style="GhostCard.TCheckbutton",
+                            command=action).pack(anchor="w", padx=10, pady=1)
+
+        self.shield_detail = tk.Label(card, text="", bg=bg, fg="#7b8494",
+                                      font=("Segoe UI", 8), justify="left",
+                                      wraplength=234)
+        self.shield_detail.pack(anchor="w", padx=12, pady=(6, 0))
+
+        tk.Frame(card, bg="#1d2129", height=1).pack(fill="x", padx=12,
+                                                    pady=(10, 8))
+
+        row = tk.Frame(card, bg=bg)
+        row.pack(fill="x", padx=12)
+        tk.Label(row, text="Opacidad", bg=bg, fg="#d8dee9",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.opacity_label = tk.Label(row, text="", bg=bg, fg="#88c0d0",
+                                      font=("Segoe UI", 9))
+        self.opacity_label.pack(side="right")
+
+        self.opacity_var = tk.DoubleVar(value=self.config["opacity"])
+        ttk.Scale(card, from_=MIN_OPACITY, to=1.0, variable=self.opacity_var,
+                  style="Ghost.Horizontal.TScale",
+                  command=self.on_opacity_slide).pack(fill="x", padx=12,
+                                                      pady=(6, 2))
+        tk.Label(card, text="Ctrl+0 la devuelve al 100% si te pasas de bajo.",
+                 bg=bg, fg="#616a7a", font=("Segoe UI", 8)).pack(anchor="w",
+                                                                 padx=12)
+
+        tk.Frame(card, bg="#1d2129", height=1).pack(fill="x", padx=12,
+                                                    pady=(10, 8))
+
+        row = tk.Frame(card, bg=bg)
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        tk.Label(row, text="Modelo de Ollama", bg=bg, fg="#d8dee9",
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Entry(row, textvariable=self.model_var, bg="#13161b", fg="#eceff4",
+                 insertbackground="#eceff4", relief="flat", width=13,
+                 font=("Segoe UI", 9)).pack(side="right", ipady=2)
+
+    def toggle_settings(self):
+        if self.settings_open:
+            self.close_settings()
+            return
+        self.settings_card.place(relx=1.0, x=-12, y=32, anchor="ne", width=258)
+        self.settings_card.lift()
+        self.settings_open = True
+        self.settings_button.config(fg="#eceff4")
+        self.root.bind("<Escape>", lambda _event: self.close_settings())
+        # Un clic en cualquier otro sitio la cierra, como cualquier menu.
+        self.root.bind_all("<Button-1>", self._settings_click, add="+")
+
+    def close_settings(self):
+        if not self.settings_open:
+            return
+        self.settings_card.place_forget()
+        self.settings_open = False
+        self.settings_button.config(fg="#7b8494")
+        self.root.unbind("<Escape>")
+        self.root.unbind_all("<Button-1>")
+
+    def _settings_click(self, event):
+        widget = event.widget
+        while widget is not None:
+            if widget is self.settings_card or widget is self.settings_button:
+                return
+            widget = getattr(widget, "master", None)
+        self.close_settings()
+
+    # -- opacidad --
+
+    def on_opacity_slide(self, _value=None):
+        # El clamp cubre un config.json editado a mano: sin el, un 0.05 ahi
+        # dentro dejaria el panel invisible y sin forma de recuperarlo.
+        value = min(1.0, max(MIN_OPACITY, round(self.opacity_var.get(), 2)))
+        self.config["opacity"] = value
+        self.opacity_label.config(text="%d %%" % round(value * 100))
+        self.apply_opacity()
+
+    def apply_opacity(self):
+        """Pone el alpha y repone el estilo que Tk se lleva por delante.
+
+        Tk implementa -alpha convirtiendo la ventana en layered, y al hacerlo
+        BORRA el WS_EX_TOOLWINDOW. Sin esta linea el panel reaparece en la
+        barra de tareas y, peor, verify_taskbar lo detecta en el siguiente
+        sondeo y hace withdraw/deiconify para reponerlo: un parpadeo cada dos
+        segundos mientras el programa este abierto.
+        """
+        self.root.attributes("-alpha", self.config["opacity"])
+        hide_from_taskbar(self.hwnd)
+
+    def reset_opacity(self, _event=None):
+        """Salida de emergencia: si te has quedado al 1% no ves ni el slider."""
+        self.opacity_var.set(1.0)
+        self.on_opacity_slide()
+        self.flash("Opacidad al 100%")
+        return "break"
+
     # -- chat de IA --
 
     OLLAMA_URL = "http://localhost:11434/api/chat"
 
     def _build_chat_tab(self, notebook):
-        tab = tk.Frame(notebook, bg="#14161a")
+        tab = tk.Frame(notebook, bg="#0c0e11")
         notebook.add(tab, text="Chat IA")
 
-        top = tk.Frame(tab, bg="#14161a")
-        top.pack(fill="x", pady=(6, 4))
-
-        tk.Label(top, text="Modelo de Ollama:", bg="#14161a", fg="#d8dee9",
-                 font=("Segoe UI", 9)).pack(side="left")
+        # El modelo se elige en Ajustes: es algo que se toca una vez, no algo
+        # que merezca una fila fija encima de la conversacion.
         self.model_var = tk.StringVar(
             value=self.config.get("ollama_model", "llama3.2"))
-        tk.Entry(top, textvariable=self.model_var, bg="#1c1f26", fg="#eceff4",
-                 insertbackground="#eceff4", relief="flat", width=18,
-                 font=("Segoe UI", 9)).pack(side="left", padx=6, ipady=2)
 
-        self.chat_log = tk.Text(tab, bg="#1c1f26", fg="#eceff4", relief="flat",
+        self.chat_log = tk.Text(tab, bd=0, highlightthickness=0,
+                                bg="#13161b", fg="#eceff4", relief="flat",
                                 font=("Segoe UI", 10), wrap="word", padx=10,
                                 pady=10, state="disabled")
         self.chat_log.pack(fill="both", expand=True, pady=(4, 4))
@@ -559,9 +740,10 @@ class GhostPanel:
                                     font=("Segoe UI", 10, "bold"))
         self.chat_log.tag_configure("err", foreground="#bf616a")
 
-        entry_row = tk.Frame(tab, bg="#14161a")
+        entry_row = tk.Frame(tab, bg="#0c0e11")
         entry_row.pack(fill="x", pady=(0, 6))
-        self.chat_input = tk.Text(entry_row, height=2, bg="#1c1f26",
+        self.chat_input = tk.Text(entry_row, height=2, bd=0,
+                                  highlightthickness=0, bg="#13161b",
                                   fg="#eceff4", insertbackground="#eceff4",
                                   relief="flat", font=("Segoe UI", 10),
                                   wrap="word", padx=8, pady=6)
@@ -570,9 +752,9 @@ class GhostPanel:
         self.chat_input.bind("<Return>", self._on_chat_return)
         self.chat_input.bind("<Shift-Return>", lambda _e: None)
         self.send_button = tk.Button(entry_row, text="Enviar",
-                                     command=self.chat_send, bg="#3b4252",
+                                     command=self.chat_send, bg="#1b2028",
                                      fg="#eceff4", relief="flat",
-                                     activebackground="#4c566a",
+                                     activebackground="#2a3140",
                                      activeforeground="#eceff4", padx=12)
         self.send_button.pack(side="left", padx=(6, 0), fill="y")
 
@@ -840,6 +1022,7 @@ class GhostPanel:
         self.notes.image_create(index, image=photo, padx=2, pady=4)
         self.photo_refs.append(photo)
         self.image_files[str(photo)] = {"file": filename, "width": width}
+        self.autosave()
         return True
 
     # -- redimensionado --
@@ -875,6 +1058,9 @@ class GhostPanel:
     def delete_image(self, tk_name, position):
         self.notes.delete(position)
         self.forget_photo(tk_name)
+        # Guardar aqui es lo que borra tambien el archivo del USB: la poda de
+        # save_document se lleva las imagenes que ya no salen en el documento.
+        self.autosave()
         self.flash("Imagen eliminada")
 
     def forget_photo(self, tk_name):
@@ -895,8 +1081,8 @@ class GhostPanel:
         tk_name, position = found
         info = self.image_files[tk_name]
 
-        menu = tk.Menu(self.root, tearoff=0, bg="#1c1f26", fg="#eceff4",
-                       activebackground="#3b4252", activeforeground="#eceff4",
+        menu = tk.Menu(self.root, tearoff=0, bg="#13161b", fg="#eceff4",
+                       activebackground="#1b2028", activeforeground="#eceff4",
                        borderwidth=0)
         menu.add_command(label="Ver con zoom (doble clic)",
                          command=lambda: self.open_viewer(info["file"]))
@@ -971,8 +1157,8 @@ class GhostPanel:
                               ("-", lambda: self.viewer_scale(1 / ZOOM_STEP)),
                               ("100%", lambda: self.viewer_set_zoom(1.0)),
                               ("Ajustar", self.viewer_fit)):
-            tk.Button(bar, text=text, command=command, bg="#3b4252",
-                      fg="#eceff4", relief="flat", activebackground="#4c566a",
+            tk.Button(bar, text=text, command=command, bg="#1b2028",
+                      fg="#eceff4", relief="flat", activebackground="#2a3140",
                       activeforeground="#eceff4", padx=8).pack(side="right",
                                                                padx=3)
 
@@ -1089,15 +1275,22 @@ class GhostPanel:
         canvas.yview_moveto(max(0.0, center_y - (last_y - first_y) / 2))
 
     def load_into_widget(self, segments):
-        self.notes.delete("1.0", "end")
-        self.photo_refs.clear()
-        self.image_files.clear()
-        for segment in segments:
-            if segment.get("t") == "text":
-                self.notes.insert("end", segment.get("v", ""))
-            elif segment.get("t") == "image" and segment.get("f"):
-                self.place_image(segment["f"], index="end",
-                                 width=segment.get("w"))
+        # El guardado automatico se calla mientras se carga. Si no, cada imagen
+        # que entra guardaria un documento a medias y la poda de save_document
+        # borraria del USB las que todavia no han llegado.
+        self.loading = True
+        try:
+            self.notes.delete("1.0", "end")
+            self.photo_refs.clear()
+            self.image_files.clear()
+            for segment in segments:
+                if segment.get("t") == "text":
+                    self.notes.insert("end", segment.get("v", ""))
+                elif segment.get("t") == "image" and segment.get("f"):
+                    self.place_image(segment["f"], index="end",
+                                     width=segment.get("w"))
+        finally:
+            self.loading = False
         self.notes.edit_modified(False)
 
     def serialize(self):
@@ -1249,9 +1442,10 @@ class GhostPanel:
             self.auto_hide = False
             self.protected_var.set(False)
             self.config["protected"] = False
-            self.shield_label.config(
-                text="Visible: el panel SI aparece en la grabacion.",
-                fg="#ebcb8b")
+            self.shield_dot.config(fg="#ebcb8b")
+            self.shield_label.config(text="Visible en capturas")
+            self.shield_detail.config(
+                text="El panel SI aparece en la grabacion.", fg="#ebcb8b")
             if announce:
                 self.flash("Proteccion desactivada")
             return
@@ -1268,16 +1462,20 @@ class GhostPanel:
 
         if confirmed:
             self.auto_hide = False
-            self.shield_label.config(
-                text="Invisible total: OBS compone lo que hay detras del panel, "
-                     "no queda ningun rectangulo.", fg="#a3be8c")
+            self.shield_dot.config(fg="#a3be8c")
+            self.shield_label.config(text="Invisible en capturas")
+            self.shield_detail.config(
+                text="Invisibilidad total: OBS compone lo que hay detras del "
+                     "panel, no queda ningun rectangulo.", fg="#a3be8c")
         else:
             # Sin invisibilidad real no dejamos WDA_MONITOR puesto: preferimos
             # que la ventana no este en pantalla a que salga un cuadro negro.
             set_capture_affinity(self.hwnd, WDA_NONE)
             self.auto_hide = True
             detail = error or "tu version de Windows no lo admite"
-            self.shield_label.config(
+            self.shield_dot.config(fg="#bf616a")
+            self.shield_label.config(text="Sin invisibilidad real")
+            self.shield_detail.config(
                 text="Sin invisibilidad real (%s). Para que NO salga un "
                      "rectangulo negro, el panel se ocultara solo mientras OBS "
                      "este abierto." % detail, fg="#bf616a")
@@ -1314,12 +1512,11 @@ class GhostPanel:
     def poll_obs(self):
         running = obs_is_running()
         if running is None:
-            self.obs_label.config(text="OBS: no se ha podido comprobar",
-                                  fg="#7b8494")
+            self.obs_label.config(text="· OBS sin comprobar", fg="#616a7a")
         elif running:
-            self.obs_label.config(text="OBS: en ejecucion", fg="#88c0d0")
+            self.obs_label.config(text="· OBS en ejecucion", fg="#88c0d0")
         else:
-            self.obs_label.config(text="OBS: cerrado", fg="#7b8494")
+            self.obs_label.config(text="· OBS cerrado", fg="#616a7a")
 
         # Al arrancar OBS reafirmamos la proteccion antes de que capture nada.
         if running and self.last_obs_state is not True:
@@ -1379,6 +1576,41 @@ class GhostPanel:
         else:
             self.flash("No se ha podido guardar")
         return "break"
+
+    # -- guardado automatico --
+
+    def on_notes_modified(self, _event=None):
+        """<<Modified>> salta al pasar de limpio a sucio, no en cada tecla."""
+        if not self.notes.edit_modified():
+            # Es el reset que hacemos nosotros al guardar, no un cambio tuyo.
+            return
+        self.schedule_autosave()
+
+    def schedule_autosave(self):
+        if self.autosave_job is not None:
+            self.root.after_cancel(self.autosave_job)
+        self.autosave_job = self.root.after(AUTOSAVE_DELAY, self.autosave)
+
+    def autosave(self, aviso=None):
+        """Guarda sin anunciarlo, salvo que falle o se pida un aviso.
+
+        Las imagenes no esperan al temporizador: insertar, redimensionar o
+        borrar una es una accion deliberada y cara de repetir, asi que se
+        escribe el documento en el acto. Ademas save_document poda del USB las
+        imagenes que ya no estan en el documento, de modo que borrar una la
+        quita tambien del pendrive sin tener que cerrar el programa.
+        """
+        if self.loading:
+            return
+        if self.autosave_job is not None:
+            self.root.after_cancel(self.autosave_job)
+            self.autosave_job = None
+        if save_document(self.serialize()):
+            self.notes.edit_modified(False)
+            if aviso:
+                self.flash(aviso)
+        else:
+            self.flash("No se ha podido guardar en %s" % state_dir())
 
     def quit(self):
         self.stop_ollama()

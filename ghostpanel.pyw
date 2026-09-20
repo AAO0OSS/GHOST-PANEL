@@ -430,6 +430,7 @@ class GhostPanel:
         self.viewer = None         # overlay del visor, o None si esta cerrado
         self.viewer_canvas = None
         self.viewer_photo = None   # la PhotoImage a tamaño de zoom actual
+        self.viewer_bars = None    # (horizontal, vertical) del visor
         self.viewer_file = None
         self.viewer_zoom = 1.0
         self.ollama_process = None  # solo si lo hemos arrancado nosotros
@@ -515,6 +516,17 @@ class GhostPanel:
         style.map("Ghost.TNotebook.Tab",
                   background=[("selected", "#0c0e11")],
                   foreground=[("selected", "#d8dee9")])
+
+        # Barras del visor. Sin esto salen en el gris claro de Windows, que en
+        # un visor casi negro canta mas que la propia imagen.
+        for orientacion in ("Vertical", "Horizontal"):
+            style.configure("Ghost.%s.TScrollbar" % orientacion,
+                            background="#1d2129", troughcolor="#0b0c0f",
+                            bordercolor="#0b0c0f", arrowcolor="#7b8494",
+                            lightcolor="#1d2129", darkcolor="#1d2129",
+                            borderwidth=0, arrowsize=12)
+            style.map("Ghost.%s.TScrollbar" % orientacion,
+                      background=[("active", "#2a3140")])
 
         notebook = ttk.Notebook(root, style="Ghost.TNotebook")
         notebook.pack(fill="both", expand=True, padx=12, pady=6)
@@ -1157,11 +1169,28 @@ class GhostPanel:
                       activeforeground="#eceff4", padx=8).pack(side="right",
                                                                padx=3)
 
-        canvas = tk.Canvas(overlay, bg="#0b0c0f", highlightthickness=0,
-                           takefocus=1)
-        canvas.pack(fill="both", expand=True, padx=8)
+        # El canvas y sus barras van en grid dentro de un hueco propio: con
+        # pack no se puede poner una barra al lado y otra debajo sin pelearse
+        # por el espacio.
+        area = tk.Frame(overlay, bg="#0b0c0f")
+        area.pack(fill="both", expand=True, padx=8)
+        area.rowconfigure(0, weight=1)
+        area.columnconfigure(0, weight=1)
 
-        tk.Label(overlay, text="rueda = zoom  ·  arrastrar = mover  ·  "
+        canvas = tk.Canvas(area, bg="#0b0c0f", highlightthickness=0,
+                           takefocus=1)
+        canvas.grid(row=0, column=0, sticky="nsew")
+
+        vbar = ttk.Scrollbar(area, orient="vertical", command=canvas.yview,
+                             style="Ghost.Vertical.TScrollbar")
+        hbar = ttk.Scrollbar(area, orient="horizontal", command=canvas.xview,
+                             style="Ghost.Horizontal.TScrollbar")
+        vbar.grid(row=0, column=1, sticky="ns")
+        hbar.grid(row=1, column=0, sticky="ew")
+        canvas.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set)
+        self.viewer_bars = (hbar, vbar)
+
+        tk.Label(overlay, text="rueda = zoom  ·  barras o arrastrar = mover  ·  "
                                "Esc = cerrar", bg="#0b0c0f", fg="#616a7a",
                  font=("Segoe UI", 8)).pack(fill="x", padx=8, pady=(4, 8))
 
@@ -1199,6 +1228,7 @@ class GhostPanel:
         self.viewer_canvas = None
         self.viewer_photo = None
         self.viewer_file = None
+        self.viewer_bars = None
         self.forget_cursors()
         self.notes.focus_set()
 
@@ -1251,9 +1281,27 @@ class GhostPanel:
                                        top + photo.height()))
         canvas.update_idletasks()
         self.viewer_recenter(before_x, before_y)
+        self.viewer_update_bars(photo)
 
         self.viewer_label.config(text="%d%%  ·  %d × %d px" % (
             round(self.viewer_zoom * 100), photo.width(), photo.height()))
+
+    def viewer_update_bars(self, photo):
+        """Cada barra sale solo si por ese lado hay imagen fuera de la vista.
+
+        Con la imagen ajustada al hueco no sobra nada por donde moverse, y una
+        barra que no scrollea solo estorba.
+        """
+        if not self.viewer_bars:
+            return
+        hbar, vbar = self.viewer_bars
+        canvas = self.viewer_canvas
+        for barra, sobra in ((hbar, photo.width() > canvas.winfo_width()),
+                             (vbar, photo.height() > canvas.winfo_height())):
+            if sobra:
+                barra.grid()
+            else:
+                barra.grid_remove()
 
     def viewer_center(self):
         """Centro visible actual, en fracciones del area total."""

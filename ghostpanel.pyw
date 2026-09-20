@@ -437,6 +437,7 @@ class GhostPanel:
         self.settings_open = False
         self.autosave_job = None   # id del after() pendiente, si lo hay
         self.loading = False       # True mientras se repuebla el panel
+        self.notes_bar_shown = True
 
         # Arrancamos oculta y solo mostramos la ventana cuando la proteccion
         # ya esta puesta: asi no se cuela ni un fotograma en la grabacion.
@@ -462,9 +463,12 @@ class GhostPanel:
         self.apply_cursor_hiding(self.config["hide_cursor"])
         self.on_opacity_slide()  # deja el alpha y el % en su sitio al arrancar
 
-        self.load_into_widget(load_document())
-
+        # El documento se carga DESPUES de mostrar la ventana: hasta que Tk no
+        # la dibuja, notes.winfo_width() vale 1 y el tope de ancho de las
+        # imagenes saldria del valor de reserva en vez del panel de verdad.
         root.deiconify()
+        root.update_idletasks()
+        self.load_into_widget(load_document())
         self.poll_obs()
         self.poll_hotkey()
 
@@ -534,12 +538,21 @@ class GhostPanel:
         notes_tab = tk.Frame(notebook, bg="#0c0e11")
         notebook.add(notes_tab, text="Notas")
 
+        notes_tab.rowconfigure(0, weight=1)
+        notes_tab.columnconfigure(0, weight=1)
+
         self.notes = tk.Text(notes_tab, bd=0, highlightthickness=0,
                              bg="#13161b", fg="#eceff4",
                              insertbackground="#eceff4", relief="flat",
                              font=("Consolas", 11), undo=True, wrap="word",
                              padx=10, pady=10)
-        self.notes.pack(fill="both", expand=True)
+        self.notes.grid(row=0, column=0, sticky="nsew")
+
+        self.notes_bar = ttk.Scrollbar(notes_tab, orient="vertical",
+                                       command=self.notes.yview,
+                                       style="Ghost.Vertical.TScrollbar")
+        self.notes_bar.grid(row=0, column=1, sticky="ns")
+        self.notes.configure(yscrollcommand=self.on_notes_scroll)
 
         self._build_chat_tab(notebook)
 
@@ -1020,7 +1033,11 @@ class GhostPanel:
     def place_image(self, filename, index=tk.INSERT, width=None):
         if width is None:
             width = min(DEFAULT_IMAGE_WIDTH, self.natural_width(filename))
-        width = max(MIN_IMAGE_WIDTH, min(MAX_IMAGE_WIDTH, int(width)))
+        # Nunca mas ancha que el panel. El Text va con wrap="word" y por tanto
+        # no se desplaza en horizontal: lo que sobresale por la derecha es
+        # inalcanzable. Para ver el detalle esta el visor, con sus dos barras.
+        width = max(MIN_IMAGE_WIDTH, min(MAX_IMAGE_WIDTH, int(width),
+                                         self.panel_width()))
 
         photo = self.photo_for(filename, width)
         if photo is None:
@@ -1051,8 +1068,11 @@ class GhostPanel:
             return
         if width is None:
             width = info["width"] * factor
-        width = max(MIN_IMAGE_WIDTH, min(MAX_IMAGE_WIDTH, int(width)))
+        tope = self.panel_width()
+        width = max(MIN_IMAGE_WIDTH, min(MAX_IMAGE_WIDTH, int(width), tope))
         if width == info["width"]:
+            if factor and factor > 1:
+                self.flash("Ya ocupa todo el panel · doble clic para ampliarla")
             return
 
         # Tk no reescala una imagen ya insertada: hay que quitarla y volver a
@@ -1617,6 +1637,22 @@ class GhostPanel:
         return "break"
 
     # -- guardado automatico --
+
+    def on_notes_scroll(self, first, last):
+        """yscrollcommand del panel: mueve la barra y la esconde si no hace falta.
+
+        Se compara contra el estado anterior antes de tocar el grid: cambiar la
+        disposicion dispara otro scroll, y sin esa comparacion las dos llamadas
+        se realimentan cuando el contenido mide justo lo que el hueco.
+        """
+        self.notes_bar.set(first, last)
+        visible = not (float(first) <= 0.0 and float(last) >= 1.0)
+        if visible != self.notes_bar_shown:
+            self.notes_bar_shown = visible
+            if visible:
+                self.notes_bar.grid()
+            else:
+                self.notes_bar.grid_remove()
 
     def on_notes_modified(self, _event=None):
         """<<Modified>> salta al pasar de limpio a sucio, no en cada tecla."""

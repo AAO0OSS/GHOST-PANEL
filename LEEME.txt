@@ -5,15 +5,19 @@ Panel de notas invisible en OBS, Zoom, Discord, Meet y Recorte de pantalla.
 Se ve en tu monitor pero el compositor de Windows lo excluye de cualquier
 captura, usando SetWindowDisplayAffinity con WDA_EXCLUDEFROMCAPTURE.
 
+Lleva dentro todo lo que necesita: Python, Pillow, Ollama y el modelo
+llama3.2. No hay que instalar nada en el ordenador donde se enchufe.
+
 
 COMO SE ARRANCA
 ---------------
 
 Doble clic en GhostPanel.vbs
 
-No hace falta instalar nada en el ordenador: el Python y Pillow que necesita
-van dentro de la carpeta python\ de este USB. No aparece ninguna ventana de
-consola.
+Ese, y solo ese. Si haces doble clic en ghostpanel.pyw, Windows lo abriria con
+el Python DEL ORDENADOR anfitrion (si es que tiene uno), no con el del USB, y
+el panel arrancaria cojo o no arrancaria. El .vbs fuerza el interprete del USB
+y lo lanza con la ventana oculta, sin consola.
 
 
 ATAJOS
@@ -43,15 +47,26 @@ usa %APPDATA% como ultimo recurso para poder seguir guardando.
 LA PESTANA DE CHAT IA
 ---------------------
 
-Habla con una IA local por Ollama, que NO va en el USB porque es un servicio
-del sistema. Solo funciona en ordenadores que tengan Ollama instalado y
-arrancado:
+La IA va DENTRO del USB: Ollama recortado en ollama\ y el modelo llama3.2 en
+modelos\. Funciona en ordenadores que no tienen Ollama instalado.
 
-    ollama serve
-    ollama pull llama3.2
+No hay que arrancar nada a mano. Al enviar el primer mensaje, el panel mira si
+ya hay un Ollama escuchando:
 
-Si no lo hay, el chat avisa de que no puede conectar con localhost:11434. El
-resto del panel funciona igual.
+  - Si el ordenador ya tiene el suyo, lo usa, y no lo toca al salir.
+  - Si no hay ninguno, levanta el del USB sin consola y lo mata al cerrar el
+    panel (a el y al proceso que ejecuta el modelo), para no dejar nada
+    corriendo en un ordenador ajeno.
+
+CUANTO TARDA, medido en este mismo USB:
+
+  primera respuesta   unos 150 s   hay que leer 1,9 GB del pendrive
+  siguientes          unos 4 s     el modelo ya esta en RAM
+
+Esa espera larga es UNA SOLA VEZ por sesion: el panel arranca Ollama con
+OLLAMA_KEEP_ALIVE = -1, asi que el modelo no se descarga de la RAM a los cinco
+minutos de no usarlo. Si vas a usar el chat en directo, manda un "hola" al
+empezar y a partir de ahi va rapido.
 
 
 LIMITES QUE CONVIENE SABER
@@ -62,8 +77,16 @@ LIMITES QUE CONVIENE SABER
   dejar un rectangulo negro en la grabacion, se oculta solo mientras OBS este
   abierto.
 
+- Este pendrive es USB 2.0 y lento: 4 MB/s de escritura, 18 MB/s de lectura.
+  Ademas el programa entero vive en el, asi que si el USB se desconecta con el
+  panel abierto, el panel muere en el acto. Ya paso una vez durante las
+  pruebas. Enchufalo bien y no lo muevas durante un directo.
+
 - No se pueden insertar PDFs: eso pide PyMuPDF, que no esta incluido. Las
   imagenes (PNG, JPG, GIF, BMP, WEBP) si funcionan.
+
+- El Ollama del USB lleva el motor de CPU y el runner de Vulkan, que da GPU en
+  NVIDIA, AMD e Intel. No lleva CUDA ni ROCm porque ocupan 2,7 GB.
 
 - Algunos equipos corporativos bloquean los .vbs que vienen de un USB. Si pasa
   eso, se puede arrancar igual con:
@@ -73,6 +96,9 @@ LIMITES QUE CONVIENE SABER
   esta la casilla "Sin cursor", que oculta el puntero mientras esta sobre el
   panel.
 
+- FAT32 no tiene permisos: tus notas quedan en datos\document.json, legibles
+  por cualquiera que enchufe este USB.
+
 
 QUE HAY EN CADA SITIO
 ---------------------
@@ -80,5 +106,7 @@ QUE HAY EN CADA SITIO
 GhostPanel.vbs    lanzador sin consola, sin rutas fijas
 ghostpanel.pyw    la aplicacion
 PORTABLE.txt      marcador: mientras exista, los datos van al USB
-python\           Python 3.11.5 recortado + Tcl/Tk + Pillow (43 MB)
+python\           Python 3.11.5 recortado + Tcl/Tk + Pillow    (46 MB)
+ollama\           Ollama recortado: CPU + Vulkan              (104 MB)
+modelos\          el modelo llama3.2                          (1,9 GB)
 datos\            tus notas, imagenes y configuracion (se crea al guardar)

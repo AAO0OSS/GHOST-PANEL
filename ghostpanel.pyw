@@ -496,11 +496,6 @@ class GhostPanel:
                                      fg="#7b8494", font=("Segoe UI", 9))
         self.shield_label.pack(side="left", padx=(5, 0))
 
-        self.obs_label = tk.Label(header, text="· comprobando OBS",
-                                  bg="#0c0e11", fg="#7b8494",
-                                  font=("Segoe UI", 9))
-        self.obs_label.pack(side="left", padx=(5, 0))
-
         self.settings_button = tk.Button(
             header, text="⚙", command=self.toggle_settings,
             bg="#0c0e11", fg="#7b8494", relief="flat", bd=0,
@@ -1510,13 +1505,9 @@ class GhostPanel:
     # -- bucles --
 
     def poll_obs(self):
+        # El estado de OBS ya no se enseña, pero se sigue vigilando: de el
+        # dependen la reafirmacion de la proteccion y el auto_hide de mas abajo.
         running = obs_is_running()
-        if running is None:
-            self.obs_label.config(text="· OBS sin comprobar", fg="#616a7a")
-        elif running:
-            self.obs_label.config(text="· OBS en ejecucion", fg="#88c0d0")
-        else:
-            self.obs_label.config(text="· OBS cerrado", fg="#616a7a")
 
         # Al arrancar OBS reafirmamos la proteccion antes de que capture nada.
         if running and self.last_obs_state is not True:

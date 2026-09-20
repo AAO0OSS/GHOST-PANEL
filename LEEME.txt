@@ -24,11 +24,13 @@ ATAJOS
 ------
 
 Ctrl+Alt+H        oculta y muestra el panel (funciona aunque no tenga el foco)
-Ctrl+S            guarda
+Ctrl+S            guarda (el panel guarda solo, esto es por si acaso)
 Ctrl+V            pega texto, o la imagen que haya en el portapapeles
+Ctrl+0            devuelve la opacidad al 100% si te has pasado de bajo
 Ctrl+rueda        zoom sobre la imagen que este bajo el puntero
-doble clic        abre la imagen a pantalla completa, con zoom y arrastre
+doble clic        abre la imagen a pantalla completa, con zoom, barras y arrastre
 clic derecho      menu de tamano de la imagen
+Esc               cierra el visor o los ajustes
 
 
 DONDE SE GUARDAN TUS COSAS
@@ -36,6 +38,9 @@ DONDE SE GUARDAN TUS COSAS
 
 En la carpeta datos\ de este USB. No se escribe nada en el ordenador donde lo
 enchufes, que es justo lo que se quiere de una herramienta portable.
+
+No hace falta acordarse de guardar: el panel escribe solo, en el acto al meter
+o quitar una imagen y segundo y medio despues de que dejes de teclear.
 
 Eso lo decide el archivo PORTABLE.txt: mientras exista, los datos van al USB.
 Si lo borras, GhostPanel volveria a guardar en %APPDATA% del anfitrion.
@@ -82,6 +87,12 @@ LIMITES QUE CONVIENE SABER
   panel abierto, el panel muere en el acto. Ya paso una vez durante las
   pruebas. Enchufalo bien y no lo muevas durante un directo.
 
+- El panel se reabre donde estuviera la ultima vez. Si lo cerraste en un
+  segundo monitor y lo enchufas en un ordenador de una sola pantalla, quedara
+  fuera de la vista, y como no sale ni en la barra de tareas ni en Alt+Tab
+  parecera que no arranca. Se arregla borrando la linea "geometry" de
+  datos\config.json.
+
 - No se pueden insertar PDFs: eso pide PyMuPDF, que no esta incluido. Las
   imagenes (PNG, JPG, GIF, BMP, WEBP) si funcionan.
 
@@ -93,8 +104,12 @@ LIMITES QUE CONVIENE SABER
       python\pythonw.exe ghostpanel.pyw
 
 - OBS graba el cursor del sistema aunque la ventana sea invisible. Para eso
-  esta la casilla "Sin cursor", que oculta el puntero mientras esta sobre el
-  panel.
+  esta "Ocultar el cursor encima", en el boton de ajustes (el engranaje de
+  arriba a la derecha), donde tambien estan la invisibilidad, el "siempre
+  encima", la opacidad del panel y el modelo de la IA.
+
+- La opacidad va del 1 al 100%. Al 1% el panel no se ve pero sigue ahi y sigue
+  recibiendo los clics: Ctrl+0 lo devuelve al 100%.
 
 - FAT32 no tiene permisos: tus notas quedan en datos\document.json, legibles
   por cualquiera que enchufe este USB.

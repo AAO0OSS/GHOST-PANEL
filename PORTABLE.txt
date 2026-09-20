@@ -1,0 +1,5 @@
+La presencia de este archivo pone GhostPanel en modo portable: guarda las
+notas, las imagenes y la configuracion en la carpeta 'datos' de este USB,
+no en el %APPDATA% del ordenador donde lo enchufes.
+
+Si lo borras, GhostPanel volvera a guardar en el ordenador anfitrion.

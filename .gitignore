@@ -1,0 +1,11 @@
+# Runtime empaquetado en el USB: ~2 GB de binarios que no son fuente.
+# Se descargan aparte (ver LEEME.txt), no se versionan.
+python/
+ollama/
+modelos/
+
+# Lo que escribe el propio panel: notas, imagenes, posicion de la ventana y log.
+datos/
+
+__pycache__/
+*.pyc

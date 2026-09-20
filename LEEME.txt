@@ -1,0 +1,84 @@
+GhostPanel portable
+===================
+
+Panel de notas invisible en OBS, Zoom, Discord, Meet y Recorte de pantalla.
+Se ve en tu monitor pero el compositor de Windows lo excluye de cualquier
+captura, usando SetWindowDisplayAffinity con WDA_EXCLUDEFROMCAPTURE.
+
+
+COMO SE ARRANCA
+---------------
+
+Doble clic en GhostPanel.vbs
+
+No hace falta instalar nada en el ordenador: el Python y Pillow que necesita
+van dentro de la carpeta python\ de este USB. No aparece ninguna ventana de
+consola.
+
+
+ATAJOS
+------
+
+Ctrl+Alt+H        oculta y muestra el panel (funciona aunque no tenga el foco)
+Ctrl+S            guarda
+Ctrl+V            pega texto, o la imagen que haya en el portapapeles
+Ctrl+rueda        zoom sobre la imagen que este bajo el puntero
+doble clic        abre la imagen a pantalla completa, con zoom y arrastre
+clic derecho      menu de tamano de la imagen
+
+
+DONDE SE GUARDAN TUS COSAS
+--------------------------
+
+En la carpeta datos\ de este USB. No se escribe nada en el ordenador donde lo
+enchufes, que es justo lo que se quiere de una herramienta portable.
+
+Eso lo decide el archivo PORTABLE.txt: mientras exista, los datos van al USB.
+Si lo borras, GhostPanel volveria a guardar en %APPDATA% del anfitrion.
+
+Si el USB estuviera protegido contra escritura, el panel no se queda colgado:
+usa %APPDATA% como ultimo recurso para poder seguir guardando.
+
+
+LA PESTANA DE CHAT IA
+---------------------
+
+Habla con una IA local por Ollama, que NO va en el USB porque es un servicio
+del sistema. Solo funciona en ordenadores que tengan Ollama instalado y
+arrancado:
+
+    ollama serve
+    ollama pull llama3.2
+
+Si no lo hay, el chat avisa de que no puede conectar con localhost:11434. El
+resto del panel funciona igual.
+
+
+LIMITES QUE CONVIENE SABER
+--------------------------
+
+- Necesita Windows 10 version 2004 (build 19041) o superior. En versiones mas
+  antiguas no existe la invisibilidad real: el panel lo detecta y, en vez de
+  dejar un rectangulo negro en la grabacion, se oculta solo mientras OBS este
+  abierto.
+
+- No se pueden insertar PDFs: eso pide PyMuPDF, que no esta incluido. Las
+  imagenes (PNG, JPG, GIF, BMP, WEBP) si funcionan.
+
+- Algunos equipos corporativos bloquean los .vbs que vienen de un USB. Si pasa
+  eso, se puede arrancar igual con:
+      python\pythonw.exe ghostpanel.pyw
+
+- OBS graba el cursor del sistema aunque la ventana sea invisible. Para eso
+  esta la casilla "Sin cursor", que oculta el puntero mientras esta sobre el
+  panel.
+
+
+QUE HAY EN CADA SITIO
+---------------------
+
+GhostPanel.vbs    lanzador sin consola, sin rutas fijas
+ghostpanel.pyw    la aplicacion
+PORTABLE.txt      marcador: mientras exista, los datos van al USB
+python\           Python 3.11.5 recortado + Tcl/Tk + Pillow (43 MB)
+datos\            tus notas, imagenes y configuracion (se crea al guardar)
